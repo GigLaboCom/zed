@@ -484,8 +484,10 @@ impl X11Client {
                 move |event, _, client| match event {
                     XDPEvent::WindowAppearance(appearance) => {
                         client.with_common(|common| common.appearance = appearance);
-                        for window in client.0.borrow_mut().windows.values_mut() {
-                            window.window.set_appearance(appearance);
+                        // Not under the client's borrow: the callback reaches the
+                        // app, and a draw from there borrows the client again.
+                        for mut window in client.window_ptrs() {
+                            window.set_appearance(appearance);
                         }
                     }
                     XDPEvent::ButtonLayout(layout_str) => {
@@ -493,8 +495,8 @@ impl X11Client {
                             .log_err()
                             .unwrap_or_else(WindowButtonLayout::linux_default);
                         client.with_common(|common| common.button_layout = layout);
-                        for window in client.0.borrow_mut().windows.values_mut() {
-                            window.window.set_button_layout();
+                        for window in client.window_ptrs() {
+                            window.set_button_layout();
                         }
                     }
                     XDPEvent::CursorTheme(_) | XDPEvent::CursorSize(_) => {
@@ -776,6 +778,18 @@ impl X11Client {
             .get(&win)
             .filter(|window_reference| !window_reference.window.state.borrow().destroyed)
             .map(|window_reference| window_reference.window.clone())
+    }
+
+    /// Every window, cloned out so the client's borrow ends before any of
+    /// them is called: a window callback can reach a draw, and a draw
+    /// borrows the client (`is_subpixel_rendering_supported`).
+    fn window_ptrs(&self) -> Vec<X11WindowStatePtr> {
+        self.0
+            .borrow()
+            .windows
+            .values()
+            .map(|window_reference| window_reference.window.clone())
+            .collect()
     }
 
     fn handle_event(&self, event: Event) -> Option<()> {
